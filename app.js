@@ -2,12 +2,21 @@
   "use strict";
 
   /* ============================================================
-     DATA
+     SUPABASE CLIENT
+     Reads the URL/key you filled in on config.js. Everything
+     below talks to Supabase through this one object instead of
+     localStorage.
      ============================================================ */
 
-  // A shared bank of gentle, evidence-informed mobility exercises.
-  // Each stage draws on a subset, mirroring the original app's
-  // progression from foundational to more demanding movements.
+  const sb = window.supabase.createClient(
+    window.PARXON_CONFIG.SUPABASE_URL,
+    window.PARXON_CONFIG.SUPABASE_ANON_KEY
+  );
+
+  /* ============================================================
+     DATA  (unchanged from the original app)
+     ============================================================ */
+
   const EXERCISES = [
     { id: 1, name: "Seated Marching", seconds: 60,
       instructions: "Sit tall in a sturdy chair with both feet flat on the floor. Lift your right knee toward your chest, lower it, then lift your left knee. Keep your back straight and breathe steadily throughout." },
@@ -59,56 +68,41 @@
   ];
 
   /* ============================================================
-     SUPABASE CLIENT + SESSION STATE
-     ============================================================
-     Fill in SUPABASE_URL and SUPABASE_ANON_KEY in config.js
-     (see that file — these values are safe to expose in client
-     code; access control is enforced server-side by Row-Level
-     Security policies, not by hiding this key).
+     AUTH / PROFILE STATE
+     Replaces the old USERS_KEY / SESSION_KEY localStorage model.
+     currentSession and currentProfile are kept in memory and
+     refreshed whenever Supabase tells us auth state changed.
      ============================================================ */
 
-  const supabase = window.supabase.createClient(
-    window.PARXON_CONFIG.SUPABASE_URL,
-    window.PARXON_CONFIG.SUPABASE_ANON_KEY
-  );
+  let currentSession = null;
+  let currentProfile = null; // { id, username, role, invite_code }
 
-  // Cached, synchronous view of "who's logged in" so the existing
-  // render()/requireAuth() code (written for sync localStorage
-  // reads) doesn't have to become async everywhere. This cache is
-  // kept in sync by supabase.auth.onAuthStateChange (see INIT below),
-  // which fires immediately with the current session on page load
-  // and again on every sign-in/sign-out.
-  let currentUser = null; // { id, email, username, role } | null
-
-  async function loadProfile(authUser) {
-    if (!authUser) return null;
-    const { data, error } = await supabase
+  async function loadProfile(userId) {
+    const { data, error } = await sb
       .from("profiles")
-      .select("username, role")
-      .eq("id", authUser.id)
+      .select("*")
+      .eq("id", userId)
       .single();
-    if (error) {
-      console.error("Failed to load profile:", error);
-      return { id: authUser.id, email: authUser.email, username: authUser.email, role: null };
-    }
-    return { id: authUser.id, email: authUser.email, username: data.username, role: data.role };
+    currentProfile = error ? null : data;
+    return currentProfile;
   }
 
-  function getSession() {
-    // Synchronous accessor used throughout the existing view code.
-    return currentUser;
-  }
-  function clearSession() {
-    currentUser = null;
-  }
+  // Fires on login, logout, and token refresh. Keeps our in-memory
+  // state in sync and re-renders whatever route we're on.
+  sb.auth.onAuthStateChange(async (_event, session) => {
+    currentSession = session;
+    if (session) await loadProfile(session.user.id);
+    else currentProfile = null;
+    render();
+  });
 
   /* ============================================================
-     UTILITIES
+     UTILITIES  (unchanged)
      ============================================================ */
 
   const app = document.getElementById("app");
   const header = document.getElementById("siteHeader");
-  let activeTimer = null; // holds interval id for exercise countdown
+  let activeTimer = null;
   let toastTimeout = null;
 
   function navigate(hash) {
@@ -149,7 +143,20 @@
     if (activeTimer) { clearInterval(activeTimer); activeTimer = null; }
   }
 
-  /* ---------- Voice command recognition ---------- */
+  function randomInviteCode() {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O/1/I ambiguity
+    let out = "";
+    for (let i = 0; i < 6; i++) out += chars[Math.floor(Math.random() * chars.length)];
+    return out;
+  }
+
+  function startOfTodayISO() {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.toISOString();
+  }
+
+  /* ---------- Voice command recognition (unchanged) ---------- */
 
   function listenForCommand() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -194,6 +201,26 @@
   }
 
   /* ============================================================
+     PUSH NOTIFICATIONS (OneSignal)
+     Only runs if you've set ONESIGNAL_APP_ID in config.js. Tags
+     the caregiver's device with their Supabase user id, so the
+     daily server-side check can target notifications at them.
+     ============================================================ */
+
+  async function initPushForCaregiver() {
+    const appId = window.PARXON_CONFIG.ONESIGNAL_APP_ID;
+    if (!appId || appId.startsWith("YOUR-") || !window.OneSignal) return;
+    try {
+      window.OneSignalDeferred = window.OneSignalDeferred || [];
+      window.OneSignalDeferred.push(async (OneSignal) => {
+        await OneSignal.init({ appId });
+        await OneSignal.login(currentSession.user.id);
+        await OneSignal.Notifications.requestPermission();
+      });
+    } catch (e) { /* push is optional — fail quietly */ }
+  }
+
+  /* ============================================================
      ROUTER
      ============================================================ */
 
@@ -204,25 +231,27 @@
   }
 
   function requireAuth(hash) {
-    const session = getSession();
-    if (!session && !PUBLIC_ROUTES.includes(hash)) {
+    if (!currentSession && !PUBLIC_ROUTES.includes(hash)) {
       location.hash = "#/login";
       return false;
     }
-    if (session && (hash === "#/login" || hash === "#/signup")) {
-      location.hash = "#/home";
+    if (currentSession && (hash === "#/login" || hash === "#/signup")) {
+      location.hash = currentProfile && currentProfile.role ? "#/home" : "#/role";
+      return false;
+    }
+    if (currentSession && currentProfile && !currentProfile.role && hash !== "#/role") {
+      location.hash = "#/role";
       return false;
     }
     return true;
   }
 
-  function render() {
+  async function render() {
     clearActiveTimer();
     const hash = currentRoute();
     if (!requireAuth(hash)) return;
 
-    const session = getSession();
-    header.hidden = !session;
+    header.hidden = !currentSession;
 
     const parts = hash.replace(/^#\//, "").split("/");
     const route = parts[0];
@@ -232,7 +261,8 @@
       case "login": renderLogin(); break;
       case "signup": renderSignup(); break;
       case "role": renderRole(); break;
-      case "home": renderHome(); break;
+      case "home": await renderHome(); break;
+      case "patient": await renderPatientDetail(parts[1]); break;
       case "stage": renderStage(parts[1]); break;
       case "exercise": renderExercise(parts[1], parts[2]); break;
       case "games": parts[1] ? renderGameDetail(parts[1]) : renderGames(); break;
@@ -246,12 +276,12 @@
 
   window.addEventListener("hashchange", render);
   document.getElementById("logoutBtn").addEventListener("click", async () => {
-    await supabase.auth.signOut(); // triggers onAuthStateChange -> clears currentUser -> re-renders
+    await sb.auth.signOut();
     navigate("#/login");
   });
 
   /* ============================================================
-     VIEWS
+     VIEWS — AUTH
      ============================================================ */
 
   function renderSplash() {
@@ -267,8 +297,7 @@
         <p class="splash-tagline">A calm companion for daily movement, timed exercises, and steady support.</p>
       </div>`;
     setTimeout(() => {
-      const session = getSession();
-      navigate(session ? "#/home" : "#/login");
+      navigate(currentSession ? "#/home" : "#/login");
     }, 1400);
   }
 
@@ -284,7 +313,7 @@
             <label for="password">Password</label>
             <input type="password" id="password" autocomplete="current-password" required>
             <div id="loginError" class="field-error" hidden></div>
-            <button type="submit" class="btn btn-primary btn-block btn-lg" id="loginSubmit">Log in</button>
+            <button type="submit" class="btn btn-primary btn-block btn-lg">Log in</button>
           </form>
         </div>
         <p class="auth-switch">New here? <a href="#/signup">Create an account</a></p>
@@ -295,25 +324,14 @@
       const email = document.getElementById("email").value.trim();
       const password = document.getElementById("password").value;
       const errorBox = document.getElementById("loginError");
-      const submitBtn = document.getElementById("loginSubmit");
 
-      errorBox.hidden = true;
-      submitBtn.disabled = true;
-      submitBtn.textContent = "Logging in…";
-
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-
+      const { error } = await sb.auth.signInWithPassword({ email, password });
       if (error) {
-        errorBox.textContent = "Email or password is incorrect.";
+        errorBox.textContent = error.message;
         errorBox.hidden = false;
-        submitBtn.disabled = false;
-        submitBtn.textContent = "Log in";
         return;
       }
-      // Successful sign-in fires onAuthStateChange, which loads the
-      // profile and re-renders — no manual navigate() needed here,
-      // but we do it anyway so the URL updates immediately.
-      navigate("#/home");
+      // onAuthStateChange fires from here and handles navigation.
     });
   }
 
@@ -324,14 +342,14 @@
           <h1>Create your account</h1>
           <p style="color:var(--text-muted)">It only takes a moment.</p>
           <form id="signupForm" novalidate>
-            <label for="newUsername">Display name</label>
-            <input type="text" id="newUsername" autocomplete="nickname" required>
+            <label for="newUsername">Your name</label>
+            <input type="text" id="newUsername" autocomplete="name" required>
             <label for="newEmail">Email</label>
             <input type="text" id="newEmail" autocomplete="email" required>
             <label for="newPassword">Password</label>
             <input type="password" id="newPassword" autocomplete="new-password" required minlength="6">
             <div id="signupError" class="field-error" hidden></div>
-            <button type="submit" class="btn btn-primary btn-block btn-lg" id="signupSubmit">Sign up</button>
+            <button type="submit" class="btn btn-primary btn-block btn-lg">Sign up</button>
           </form>
         </div>
         <p class="auth-switch">Already have an account? <a href="#/login">Log in</a></p>
@@ -343,44 +361,30 @@
       const email = document.getElementById("newEmail").value.trim();
       const password = document.getElementById("newPassword").value;
       const errorBox = document.getElementById("signupError");
-      const submitBtn = document.getElementById("signupSubmit");
 
       if (!username || !email || password.length < 6) {
         errorBox.textContent = "Please fill in every field — password needs at least 6 characters.";
         errorBox.hidden = false;
         return;
       }
-      errorBox.hidden = true;
-      submitBtn.disabled = true;
-      submitBtn.textContent = "Creating account…";
 
-      const { data, error } = await supabase.auth.signUp({ email, password });
+      const { data, error } = await sb.auth.signUp({ email, password });
       if (error) {
         errorBox.textContent = error.message;
         errorBox.hidden = false;
-        submitBtn.disabled = false;
-        submitBtn.textContent = "Sign up";
         return;
       }
-
-      // Create the matching profile row. (If email confirmation is
-      // required in your Supabase project settings, data.user exists
-      // but there's no session yet — handle that case per your
-      // chosen confirmation flow; this assumes confirmation is off
-      // or auto-confirmed for simplicity.)
-      const { error: profileError } = await supabase
-        .from("profiles")
-        .insert({ id: data.user.id, username, role: null });
-
-      if (profileError) {
-        errorBox.textContent = "Account created, but saving your profile failed: " + profileError.message;
+      if (!data.session) {
+        errorBox.textContent = "Check your email to confirm your account, then log in.";
         errorBox.hidden = false;
-        submitBtn.disabled = false;
-        submitBtn.textContent = "Sign up";
         return;
       }
 
-      navigate("#/role");
+      // Create the matching profile row. role stays null until
+      // the person picks it on the next screen.
+      await sb.from("profiles").insert({ id: data.user.id, username });
+      // onAuthStateChange fires and loads the (roleless) profile,
+      // requireAuth() then routes to #/role automatically.
     });
   }
 
@@ -406,26 +410,46 @@
       </div>`;
 
     const choose = async (role) => {
-      const { error } = await supabase
-        .from("profiles")
-        .update({ role })
-        .eq("id", currentUser.id);
-      if (error) { toast("Couldn't save your role — please try again."); return; }
-      currentUser.role = role;
+      const updates = { role };
+      if (role === "patient") updates.invite_code = randomInviteCode();
+      await sb.from("profiles").update(updates).eq("id", currentSession.user.id);
+      await loadProfile(currentSession.user.id);
+      if (role === "caregiver") await initPushForCaregiver();
       navigate("#/home");
     };
     document.getElementById("roleUser").addEventListener("click", () => choose("patient"));
     document.getElementById("roleGiver").addEventListener("click", () => choose("caregiver"));
   }
 
-  function renderHome() {
-    const session = getSession();
+  /* ============================================================
+     VIEWS — HOME  (branches by role)
+     ============================================================ */
+
+  async function renderHome() {
+    if (currentProfile.role === "caregiver") await renderCaregiverHome();
+    else await renderPatientHome();
+  }
+
+  async function renderPatientHome() {
+    const { count: todayCount } = await sb
+      .from("exercise_logs")
+      .select("*", { count: "exact", head: true })
+      .eq("patient_id", currentSession.user.id)
+      .gte("completed_at", startOfTodayISO());
+
     app.innerHTML = `
       <div class="view">
         <div class="hero">
           <span class="eyebrow">Today</span>
-          <h1>Hi, ${esc(session.username)}</h1>
+          <h1>Hi, ${esc(currentProfile.username)}</h1>
           <p style="color:var(--text-muted)">Pick a stage, browse stories, or check in on your numbers.</p>
+        </div>
+
+        <div class="card card-tight" style="margin-bottom:var(--space-4)">
+          <h3 style="margin-bottom:4px">Your invite code</h3>
+          <p style="color:var(--text-muted); margin-bottom:8px">Share this with a caregiver so they can follow your progress.</p>
+          <div class="invite-code">${esc(currentProfile.invite_code || "—")}</div>
+          <p style="color:var(--text-muted); margin:8px 0 0">${todayCount > 0 ? "✅ You've logged an exercise today." : "You haven't logged an exercise yet today."}</p>
         </div>
 
         <h2>Exercise stages</h2>
@@ -470,6 +494,120 @@
     document.getElementById("voiceBtn").addEventListener("click", listenForCommand);
   }
 
+  async function renderCaregiverHome() {
+    const { data: links } = await sb
+      .from("links")
+      .select("patient_id, profiles!links_patient_id_fkey(username)")
+      .eq("caregiver_id", currentSession.user.id);
+
+    const patients = links || [];
+
+    // For each linked patient, look up today's log count so we can
+    // show a quick checkmark/status without a separate click-through.
+    const rows = await Promise.all(patients.map(async (link) => {
+      const { count } = await sb
+        .from("exercise_logs")
+        .select("*", { count: "exact", head: true })
+        .eq("patient_id", link.patient_id)
+        .gte("completed_at", startOfTodayISO());
+      return { id: link.patient_id, username: link.profiles?.username || "Patient", doneToday: count > 0 };
+    }));
+
+    const patientRows = rows.length
+      ? rows.map(p => `
+          <button type="button" class="exercise-row" data-patient="${p.id}">
+            <span class="exercise-num" style="background:${p.doneToday ? "var(--primary)" : "var(--danger)"}">${p.doneToday ? "✓" : "!"}</span>
+            <span class="exercise-name">${esc(p.username)}</span>
+            <span class="exercise-time">${p.doneToday ? "Exercised today" : "Not yet today"}</span>
+          </button>`).join("")
+      : `<p style="color:var(--text-muted)">No patients linked yet — enter an invite code below to connect one.</p>`;
+
+    app.innerHTML = `
+      <div class="view">
+        <div class="hero">
+          <span class="eyebrow">Caregiver dashboard</span>
+          <h1>Hi, ${esc(currentProfile.username)}</h1>
+          <p style="color:var(--text-muted)">Your linked patients and today's status.</p>
+        </div>
+
+        <div class="exercise-list" style="margin-bottom:var(--space-4)">${patientRows}</div>
+
+        <div class="card card-tight">
+          <h3>Link a patient</h3>
+          <p style="color:var(--text-muted)">Enter the invite code they see on their home screen.</p>
+          <form id="linkForm" novalidate>
+            <input type="text" id="inviteCode" placeholder="e.g. 7QK4XZ" required style="text-transform:uppercase">
+            <div id="linkError" class="field-error" hidden></div>
+            <button type="submit" class="btn btn-primary btn-block">Connect</button>
+          </form>
+        </div>
+
+        <h2 style="margin-top:var(--space-5)">More</h2>
+        <div class="tile-grid">
+          <button type="button" class="tile" data-nav="#/games">
+            <span class="tile-label">📖 Stories</span>
+            <span class="tile-sub">Short reads on living well with Parkinson's</span>
+          </button>
+        </div>
+      </div>`;
+
+    app.querySelectorAll("[data-patient]").forEach(btn =>
+      btn.addEventListener("click", () => navigate(`#/patient/${btn.dataset.patient}`)));
+    app.querySelectorAll("[data-nav]").forEach(btn =>
+      btn.addEventListener("click", () => navigate(btn.dataset.nav)));
+
+    document.getElementById("linkForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const code = document.getElementById("inviteCode").value.trim().toUpperCase();
+      const errorBox = document.getElementById("linkError");
+      const { error } = await sb.rpc("link_caregiver_to_patient", { code });
+      if (error) {
+        errorBox.textContent = "That code didn't match a patient — double-check and try again.";
+        errorBox.hidden = false;
+        return;
+      }
+      toast("Linked! Refreshing your dashboard.");
+      render();
+    });
+  }
+
+  async function renderPatientDetail(patientId) {
+    const { data: patient } = await sb.from("profiles").select("username").eq("id", patientId).single();
+    const { data: logs } = await sb
+      .from("exercise_logs")
+      .select("*")
+      .eq("patient_id", patientId)
+      .order("completed_at", { ascending: false })
+      .limit(30);
+
+    if (!patient) { renderNotFound(); return; }
+
+    const rows = (logs || []).map(l => {
+      const ex = EXERCISES[l.exercise_id - 1];
+      const when = new Date(l.completed_at).toLocaleString();
+      return `
+        <div class="exercise-row" style="cursor:default">
+          <span class="exercise-num">${l.stage}</span>
+          <span class="exercise-name">${esc(ex ? ex.name : "Exercise " + l.exercise_id)}</span>
+          <span class="exercise-time">${esc(when)}</span>
+        </div>`;
+    }).join("");
+
+    app.innerHTML = `
+      <div class="view">
+        <button type="button" class="back-link" id="backHome">← Dashboard</button>
+        <h1>${esc(patient.username)}'s activity</h1>
+        <p style="color:var(--text-muted)">Most recent 30 completed exercises.</p>
+        <div class="exercise-list">${rows || "<p style='color:var(--text-muted)'>No exercises logged yet.</p>"}</div>
+      </div>`;
+
+    document.getElementById("backHome").addEventListener("click", () => navigate("#/home"));
+  }
+
+  /* ============================================================
+     VIEWS — STAGES / EXERCISES
+     ============================================================ */
+
   function renderStage(stageNum) {
     const cfg = STAGES[stageNum];
     if (!cfg) { renderNotFound(); return; }
@@ -493,6 +631,15 @@
     document.getElementById("backHome").addEventListener("click", () => navigate("#/home"));
     app.querySelectorAll(".exercise-row").forEach(btn =>
       btn.addEventListener("click", () => navigate(`#/exercise/${stageNum}/${btn.dataset.num}`)));
+  }
+
+  async function logCompletion(stageNum, exerciseNum) {
+    if (!currentProfile || currentProfile.role !== "patient") return;
+    await sb.from("exercise_logs").insert({
+      patient_id: currentSession.user.id,
+      stage: parseInt(stageNum, 10),
+      exercise_id: parseInt(exerciseNum, 10),
+    });
   }
 
   function renderExercise(stageNum, exNum) {
@@ -547,6 +694,7 @@
           timerValue.textContent = formatTime(remaining);
           if (remaining <= 0) {
             clearActiveTimer();
+            logCompletion(stageNum, exNum);
             advanceExercise(stageNum, cfg, idx);
           }
         }, 1000);
@@ -554,18 +702,7 @@
     });
   }
 
-  async function logExerciseCompletion(stageNum, exerciseId) {
-    if (!currentUser) return;
-    const { error } = await supabase.from("exercise_logs").insert({
-      patient_id: currentUser.id,
-      stage: parseInt(stageNum, 10),
-      exercise_id: exerciseId,
-    });
-    if (error) console.error("Failed to log exercise completion:", error);
-  }
-
   function advanceExercise(stageNum, cfg, idx) {
-    logExerciseCompletion(stageNum, EXERCISES[idx].id); // fire-and-forget; don't block the UI on it
     const nextIdx = (idx + 1) % cfg.count;
     toast(nextIdx === 0 ? "Stage complete — starting over. Great work!" : "Nice work! Moving to the next exercise.");
     navigate(`#/exercise/${stageNum}/${nextIdx + 1}`);
@@ -577,6 +714,10 @@
     const rem = s % 60;
     return `${String(m).padStart(2, "0")}:${String(rem).padStart(2, "0")}`;
   }
+
+  /* ============================================================
+     VIEWS — STORIES / CALCULATORS  (unchanged)
+     ============================================================ */
 
   function renderGames() {
     const cards = STORIES.map((s, i) => `
@@ -707,14 +848,14 @@
 
   /* ============================================================
      INIT
+     Wait for Supabase to report whether a session already exists
+     (e.g. returning visitor with a valid token) before the first
+     render, so we don't flash the login screen unnecessarily.
      ============================================================ */
 
-  // onAuthStateChange fires once immediately with the current
-  // session (restored from Supabase's own storage) and again on
-  // every future sign-in/sign-out — each time, refresh currentUser
-  // and re-render.
-  supabase.auth.onAuthStateChange(async (_event, session) => {
-    currentUser = await loadProfile(session ? session.user : null);
+  sb.auth.getSession().then(async ({ data }) => {
+    currentSession = data.session;
+    if (currentSession) await loadProfile(currentSession.user.id);
     render();
   });
 })();

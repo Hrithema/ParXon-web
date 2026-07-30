@@ -15,7 +15,10 @@
 <header class="site-header" id="siteHeader" hidden>
   <div class="brand">
     <span class="brand-mark" aria-hidden="true">
-      <img src="assets\logo.png" alt="" id = "logo">
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="14" cy="14" r="12" stroke="currentColor" stroke-width="2.4"/>
+        <path d="M14 7v7l5 3" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
     </span>
     <span class="brand-name">ParXon</span>
   </div>
@@ -34,8 +37,17 @@
   <p>ParXon — a gentle companion for daily movement. Not a substitute for medical advice.</p>
 </footer>
 
+<!-- Supabase client library: gives us window.supabase.createClient() -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+<!-- OneSignal: handles browser push notifications for caregivers.
+     If you skip setting an App ID in config.js, this loads but the
+     app simply never calls it — nothing else breaks. -->
+<script src="https://cdn.onesignal.com/sdks/OneSignalSDK.js" defer></script>
+
+<!-- Your Supabase/OneSignal keys — see config.js -->
 <script src="config.js"></script>
+
 <script src="app.js"></script>
 </body>
 </html>
