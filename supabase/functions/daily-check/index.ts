@@ -1,22 +1,3 @@
-// ============================================================
-// ParXon — daily-check Edge Function
-//
-// What this does, once a day, triggered by the cron schedule
-// set up in cron.sql:
-//   1. Find every patient with role = 'patient'.
-//   2. For each, check whether exercise_logs has any row for
-//      them since midnight today.
-//   3. If not, find every caregiver linked to that patient and
-//      send them a push notification (OneSignal) and an email
-//      (Resend).
-//
-// This runs with the SERVICE ROLE key, which bypasses Row-Level
-// Security entirely — that's necessary here (the function needs
-// to see every patient's data, not just one person's), but it
-// also means this key must NEVER be shipped to the browser. It
-// only ever lives in this function's environment variables.
-// ============================================================
-
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("_URL")!;
@@ -44,8 +25,6 @@ async function sendPush(caregiverUserId: string, patientName: string) {
     },
     body: JSON.stringify({
       app_id: ONESIGNAL_APP_ID,
-      // Matches OneSignal.login(userId) called client-side in
-      // app.js's initPushForCaregiver().
       include_external_user_ids: [caregiverUserId],
       headings: { en: "ParXon" },
       contents: { en: `${patientName} hasn't logged an exercise today.` },
@@ -85,24 +64,19 @@ Deno.serve(async (_req) => {
   let notified = 0;
 
   for (const patient of patients ?? []) {
-    // 2. Did they log anything today?
     const { count } = await sb
       .from("exercise_logs")
       .select("*", { count: "exact", head: true })
       .eq("patient_id", patient.id)
       .gte("completed_at", todayStart);
 
-    if ((count ?? 0) > 0) continue; // they exercised — nothing to do
-
-    // 3. Find their linked caregivers.
+    if ((count ?? 0) > 0) continue; 
     const { data: links } = await sb
       .from("links")
       .select("caregiver_id")
       .eq("patient_id", patient.id);
 
     for (const link of links ?? []) {
-      // auth.users email requires the admin API — the service
-      // role key allows this even though it's normally restricted.
       const { data: userData } = await sb.auth.admin.getUserById(link.caregiver_id);
       const email = userData?.user?.email;
 

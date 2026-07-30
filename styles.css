@@ -1,13 +1,3 @@
-/* ==========================================================
-   ParXon — Design tokens
-   Palette chosen for calm, legibility, and warmth (not clinical
-   white, not high-contrast dark-mode default): a sage/teal base
-   with a warm amber accent for calls to action.
-   Typeface: Atkinson Hyperlegible for all UI/body text — it is
-   purpose-built for readers with low vision, which matters for
-   this audience. Fraunces carries personality on headlines only.
-   ========================================================== */
-
 :root {
   --bg: #EEF3F1;
   --surface: #FFFFFF;

@@ -3,9 +3,6 @@
 
   /* ============================================================
      SUPABASE CLIENT
-     Reads the URL/key you filled in on config.js. Everything
-     below talks to Supabase through this one object instead of
-     localStorage.
      ============================================================ */
 
   const sb = window.supabase.createClient(
@@ -69,9 +66,6 @@
 
   /* ============================================================
      AUTH / PROFILE STATE
-     Replaces the old USERS_KEY / SESSION_KEY localStorage model.
-     currentSession and currentProfile are kept in memory and
-     refreshed whenever Supabase tells us auth state changed.
      ============================================================ */
 
   let currentSession = null;
@@ -87,8 +81,6 @@
     return currentProfile;
   }
 
-  // Fires on login, logout, and token refresh. Keeps our in-memory
-  // state in sync and re-renders whatever route we're on.
   sb.auth.onAuthStateChange(async (_event, session) => {
     currentSession = session;
     if (session) await loadProfile(session.user.id);
@@ -331,7 +323,6 @@
         errorBox.hidden = false;
         return;
       }
-      // onAuthStateChange fires from here and handles navigation.
     });
   }
 
@@ -380,11 +371,7 @@
         return;
       }
 
-      // Create the matching profile row. role stays null until
-      // the person picks it on the next screen.
       await sb.from("profiles").insert({ id: data.user.id, username });
-      // onAuthStateChange fires and loads the (roleless) profile,
-      // requireAuth() then routes to #/role automatically.
     });
   }
 
@@ -502,8 +489,6 @@
 
     const patients = links || [];
 
-    // For each linked patient, look up today's log count so we can
-    // show a quick checkmark/status without a separate click-through.
     const rows = await Promise.all(patients.map(async (link) => {
       const { count } = await sb
         .from("exercise_logs")
@@ -846,12 +831,6 @@
       </div>`;
   }
 
-  /* ============================================================
-     INIT
-     Wait for Supabase to report whether a session already exists
-     (e.g. returning visitor with a valid token) before the first
-     render, so we don't flash the login screen unnecessarily.
-     ============================================================ */
 
   sb.auth.getSession().then(async ({ data }) => {
     currentSession = data.session;
