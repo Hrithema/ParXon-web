@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ParXon — Movement &amp; Support for Parkinson's</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip-link" href="#app">Skip to content</a>
+
+<header class="site-header" id="siteHeader" hidden>
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">
+      <img src="assets\logo.png" alt="" id = "logo">
+    </span>
+    <span class="brand-name">ParXon</span>
+  </div>
+  <nav class="main-nav" aria-label="Main">
+    <a href="#/home">Home</a>
+    <a href="#/games">Stories</a>
+    <a href="#/bmi">BMI</a>
+    <a href="#/water">Water</a>
+    <button type="button" id="logoutBtn" class="nav-logout">Log out</button>
+  </nav>
+</header>
+
+<main id="app" tabindex="-1"></main>
+
+<footer class="site-footer">
+  <p>ParXon — a gentle companion for daily movement. Not a substitute for medical advice.</p>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
