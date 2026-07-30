@@ -72,7 +72,10 @@ h3 { font-size: 1.2rem; }
 
 p { margin: 0 0 var(--space-3); }
 
-a { color: var(--primary-dark); }
+a { 
+    color: var(--primary-dark); 
+    text-decoration: none;
+}
 
 .skip-link {
   position: absolute;
@@ -87,7 +90,7 @@ a { color: var(--primary-dark); }
 .skip-link:focus { left: 0; }
 
 :focus-visible {
-  outline: 3px solid var(--accent-dark);
+  outline: 3px solid #ffffff00;
   outline-offset: 2px;
 }
 
